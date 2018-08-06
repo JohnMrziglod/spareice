@@ -1,2 +1,2 @@
 # spareice
-Scripts used for train and retrieve SPARE-ICE
+Scripts used to train and retrieve SPARE-ICE
