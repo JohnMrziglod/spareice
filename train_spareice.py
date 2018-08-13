@@ -17,8 +17,8 @@ import xarray as xr
 
 plt.style.use(styles('typhon'))
 
-experiment = "typhon"
-train = False
+experiment = "stricter_alpha"
+train = True
 print(f"Perform experiment {experiment}")
 
 # We need to train two retrievals: an ice cloud classifier and an IWP regressor
