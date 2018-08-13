@@ -17,7 +17,7 @@ import xarray as xr
 
 plt.style.use(styles('typhon'))
 
-experiment = "typhon"
+experiment = "more_hidden_with_elevation"
 train = False
 print(f"Perform experiment {experiment}")
 
