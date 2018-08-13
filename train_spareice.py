@@ -2,6 +2,7 @@
 
 import os
 os.environ["OMP_NUM_THREADS"] = "2"  # noqa
+os.environ["ARTS_BUILD_PATH"] = "/scratch/uni/u237/users/jmrziglod/arts_general/arts/build"  # noqa
 
 import numpy as np
 import matplotlib.pyplot as plt
@@ -16,7 +17,8 @@ import xarray as xr
 
 plt.style.use(styles('typhon'))
 
-experiment = "atmlab"
+experiment = "no_midlatitude_bias"
+train = True
 print(f"Perform experiment {experiment}")
 
 # We need to train two retrievals: an ice cloud classifier and an IWP regressor
@@ -37,64 +39,35 @@ ice_cloud_fields = [
 ]
 
 iwp_fields = [
-    #"mhs_channel1", "mhs_channel2",
+    "mhs_channel1", "mhs_channel2",
     "mhs_channel3", "mhs_channel4",
-    "mhs_channel5", "lat", "elevation",
-    "mhs_scnpos", #"solar_azimuth_angle",  "solar_zenith_angle",
-    'satellite_azimuth_angle', 'satellite_zenith_angle',
+    "mhs_channel5", "lat",  # "elevation",
+    "mhs_scnpos",  "solar_azimuth_angle",  "solar_zenith_angle",
+    #  'satellite_azimuth_angle', 'satellite_zenith_angle',
     "avhrr_channel3", "avhrr_channel4", "avhrr_channel5",
-    #"avhrr_channel5_std",
-    #"avhrr_tir_diff",
-    #"sea_mask",
+    "avhrr_channel4_std",
+    "avhrr_tir_diff",
+    "sea_mask",
 ]
 
 os.makedirs(f"experiments/{experiment}", exist_ok=True)
 
 # Create the SPARE-ICE object. It is not trained so far:
-spareice = SPAREICE(verbose=2, processes=15)
+spareice = SPAREICE(
+    verbose=2, processes=15, sea_mask_file="data/land_water_mask_5min.png",
+    elevation_file="data/surface_elevation_1deg.nc",
+)
 
 odata = NetCDF4().read("data/spareice_training_data.nc")
 odata = odata.dropna(dim="collocation")
 
 # Convert the collocated data to SPARE-ICE compatible data:
 tdata = spareice.standardize_collocations(odata)
-# Sometimes AVHRR channels 4 and 5 are 0, those are missing values
-tdata = tdata[(tdata.avhrr_channel4 != 0) & (tdata.avhrr_channel5 != 0)]
-tdata["sea_mask"] = sea_mask(
-    tdata.lat, tdata.lon, "data/land_water_mask_5min.png"
-)
-
-
-def get_grid_value(grid, lat, lon):
-    lat = to_array(lat)
-    lon = to_array(lon)
-
-    if lon.min() < -180 or lon.max() > 180:
-        raise ValueError("Longitudes out of bounds!")
-
-    if lat.min() < -90 or lat.max() > 90:
-        raise ValueError("Latitudes out of bounds!")
-
-    grid_lat_step = 180 / (grid.shape[0] - 1)
-    grid_lon_step = 360 / (grid.shape[1] - 1)
-
-    lat_cell = (90 - lat) / grid_lat_step
-    lon_cell = lon / grid_lon_step
-
-    return grid[lat_cell.astype(int), lon_cell.astype(int)]
-
-
-ds = xr.open_dataset("data/surface_elevation_1deg.nc", decode_times=False)
-elevation = ds.data.squeeze().values
-tdata["elevation"] = get_grid_value(elevation, tdata.lat, tdata.lon)
-
-# We do not need the depth of the oceans (this would just confuse the ANN)
-tdata.elevation[tdata.elevation < 0] = 0
 
 # We need ice water paths of 0 g/m^2 to train the ice cloud classifier.
 # Unfortunately, zero values would not pass our inhomogeneity filter (
 # because it would be NaN). Hence, we "mask" them as very small values:
-not_null_tdata = tdata[(tdata.iwp_std / 10**tdata.iwp) < 0.5]
+not_null_tdata = tdata[(tdata.iwp_std / 10**tdata.iwp) < 0.40]
 tdata = pd.concat([tdata[np.isnan(tdata.iwp)], not_null_tdata])
 
 
@@ -130,8 +103,8 @@ def balance(data, lat_bin, bin_points):
 
 
 bin_width = 15
-not_null = balance(tdata.dropna(), bin_width, 38_000)
-null = balance(tdata[np.isnan(tdata.iwp)], bin_width, 38_000)
+not_null = balance(tdata.dropna(), bin_width, 30_000)
+null = balance(tdata[np.isnan(tdata.iwp)], bin_width, 35_000)
 bdata = pd.concat([not_null, null])
 
 scat = heatmap(
@@ -143,15 +116,16 @@ scat.cmap.set_under("w")
 plt.colorbar(scat)
 plt.savefig(f"experiments/{experiment}/scnpos_lat_heatmap.png")
 
+test_ratio = 0.25
 train_data, test_data = train_test_split(
-    bdata, test_size=0.3, shuffle=True, random_state=5
+    bdata, test_size=test_ratio, shuffle=True, random_state=5
 )
 
-print(f"Use {int(not_null.lat.size*0.7)} points for training")
-print(f"Use {int(not_null.lat.size*0.3)} points for testing")
+print(f"Use {int(not_null.lat.size*(1-test_ratio))} points for training")
+print(f"Use {int(not_null.lat.size*test_ratio)} points for testing")
 
 # Should we train SPARE-ICE?
-if True:
+if train:
     with Timer("SPARE-ICE training"):
         spareice.train(
             train_data,
