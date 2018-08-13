@@ -17,8 +17,8 @@ import xarray as xr
 
 plt.style.use(styles('typhon'))
 
-experiment = "no_midlatitude_bias"
-train = True
+experiment = "typhon"
+train = False
 print(f"Perform experiment {experiment}")
 
 # We need to train two retrievals: an ice cloud classifier and an IWP regressor
@@ -41,7 +41,7 @@ ice_cloud_fields = [
 iwp_fields = [
     "mhs_channel1", "mhs_channel2",
     "mhs_channel3", "mhs_channel4",
-    "mhs_channel5", "lat",  # "elevation",
+    "mhs_channel5", "lat",  "elevation",
     "mhs_scnpos",  "solar_azimuth_angle",  "solar_zenith_angle",
     #  'satellite_azimuth_angle', 'satellite_zenith_angle',
     "avhrr_channel3", "avhrr_channel4", "avhrr_channel5",
