@@ -9,15 +9,13 @@ import matplotlib.pyplot as plt
 import pandas as pd
 from sklearn.model_selection import train_test_split
 from typhon.files import FileSet, NetCDF4
-from typhon.geographical import sea_mask
-from typhon.plots import binned_statistic, heatmap, styles, worldmap
+from typhon.plots import binned_statistic, heatmap, styles
 from typhon.retrieval import SPAREICE
 from typhon.utils import Timer, to_array
-import xarray as xr
 
 plt.style.use(styles('typhon'))
 
-experiment = "stricter_alpha"
+experiment = "like_best_spareice"
 train = True
 print(f"Perform experiment {experiment}")
 
@@ -39,15 +37,10 @@ ice_cloud_fields = [
 ]
 
 iwp_fields = [
-    "mhs_channel1", "mhs_channel2",
-    "mhs_channel3", "mhs_channel4",
-    "mhs_channel5", "lat",  "elevation",
-    "mhs_scnpos",  "solar_azimuth_angle",  "solar_zenith_angle",
-    #  'satellite_azimuth_angle', 'satellite_zenith_angle',
-    "avhrr_channel3", "avhrr_channel4", "avhrr_channel5",
-    "avhrr_channel4_std",
-    "avhrr_tir_diff",
-    "sea_mask",
+    'mhs_channel1', 'mhs_channel2', 'mhs_channel3', 'mhs_channel4',
+    'mhs_channel5', 'avhrr_tir_diff', 'lat', 'sea_mask', 'elevation',
+    'mhs_scnpos', 'solar_azimuth_angle', 'solar_zenith_angle',
+    'avhrr_channel3', 'avhrr_channel4', 'avhrr_channel5_std', 'avhrr_channel5'
 ]
 
 os.makedirs(f"experiments/{experiment}", exist_ok=True)
@@ -67,7 +60,7 @@ tdata = spareice.standardize_collocations(odata)
 # We need ice water paths of 0 g/m^2 to train the ice cloud classifier.
 # Unfortunately, zero values would not pass our inhomogeneity filter (
 # because it would be NaN). Hence, we "mask" them as very small values:
-not_null_tdata = tdata[(tdata.iwp_std / 10**tdata.iwp) < 0.40]
+not_null_tdata = tdata[(tdata.iwp_std / 10**tdata.iwp) < 0.5]
 tdata = pd.concat([tdata[np.isnan(tdata.iwp)], not_null_tdata])
 
 
@@ -103,7 +96,7 @@ def balance(data, lat_bin, bin_points):
 
 
 bin_width = 15
-not_null = balance(tdata.dropna(), bin_width, 30_000)
+not_null = balance(tdata.dropna(), bin_width, 35_000)
 null = balance(tdata[np.isnan(tdata.iwp)], bin_width, 35_000)
 bdata = pd.concat([not_null, null])
 
