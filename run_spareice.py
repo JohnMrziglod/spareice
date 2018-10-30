@@ -16,13 +16,16 @@ relevant fields to a NetCDF file.
 import os
 os.environ["OMP_NUM_THREADS"] = "2"  # noqa
 
+from typhon.collocations import Collocations
 from typhon.retrieval import SPAREICE
 from typhon.files import AVHRR_GAC_HDF, FileSet, MHS_HDF
 
-START_TIME = "2007-06-19 00:41:00"
-END_TIME = "2007-07-17 09:46:00"
-PROCESSES = 10
+START_TIME = "20 Jun 2013"
+END_TIME = "21 Jun 2013"
+PROCESSES = 1
+SAVE_COLLOCATIONS = False
 
+version = "typhon"
 
 # Define a fileset with the files from MHS / NOAA18:
 mhs_files = FileSet(
@@ -60,14 +63,43 @@ avhrr_files = FileSet(
 
 spareice_files = FileSet(
     name="SPAREICE",
-    path="/work/um0878/user_data/jmrziglod/spareice/noaa18/"
+    path="/work/um0878/user_data/jmrziglod/spareice/{version}/noaa18/"
          "{year}/{month}/{day}/{year}{month}{day}_{hour}{minute}{second}-"
          "{end_hour}{end_minute}{end_second}.nc",
 )
+spareice_files.set_placeholders(version=version)
 
-spareice = SPAREICE(verbose=2)
-spareice.retrieve_from_filesets(
-    mhs=mhs_files, avhrr=avhrr_files, output=spareice_files,
-    start=START_TIME, end=END_TIME, processes=PROCESSES,
-    sea_mask_file="land_water_mask_5min.png",
+spareice = SPAREICE(
+     verbose=2, sea_mask_file="data/land_water_mask_5min.png",
+     elevation_file="data/surface_elevation_1deg.nc",
 )
+
+# Either we search once for the collocations, save them to disk and retrieve
+# SPARE-ICE on them or we search for the collocations each time when retrieving
+# SPARE-ICE. The first approach is obviously faster.
+
+if SAVE_COLLOCATIONS:
+    collocations = Collocations(
+        path="/work/um0878/user_data/jmrziglod/collocations/MHS_AVHRR/noaa18/"
+             "{year}/{month}/{day}/{year}{month}{day}_{hour}{minute}{second}-"
+             "{end_hour}{end_minute}{end_second}.nc",
+        reference="MHS",
+    )
+    collocations.search(
+        [avhrr_files, mhs_files], start=START_TIME, end=END_TIME,
+        processes=PROCESSES, max_interval="30s", max_distance="7.5 km",
+    )
+
+    # Use the already collocated data:
+    input_filesets = collocations
+else:
+    # Search again after collocations:
+    input_filesets = [avhrr_files, mhs_files]
+
+# Retrieve SPARE-ICE:
+spareice.retrieve_from_collocations(
+    inputs=input_filesets, output=spareice_files,
+    start=START_TIME, end=END_TIME, processes=PROCESSES,
+)
+
+

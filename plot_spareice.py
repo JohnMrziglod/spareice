@@ -1,33 +1,91 @@
+#!/usr/bin/env python3
+
 import matplotlib.pyplot as plt
 import numpy as np
 from scipy.stats import binned_statistic
+from typhon.collocations import Collocations
 from typhon.files import CloudSat, FileSet
 from typhon.plots import styles
+from typhon.geographical import gridded_mean
+from typhon.retrieval import SPAREICE
 import xarray as xr
 
 plt.style.use(styles('typhon'))
 
-START = "2007"
-END = "2008"
 
 
-def collect_spareice():
+VERSION = "best_spareice"
+START = "2008"
+END = "2009"
+PROCESSES = 20
+
+print(f"Plot experiment {VERSION}")
+
+
+def get_gridded_mean(data, file, spareice):
+    retrieved = SPAREICE._retrieve_from_collocations(data, None, spareice)
+    if retrieved is None:
+        return None
+
+    data = retrieved.dropna(dim="index")
+
+    print(f"Gridding {file.times}")
+
+    lon_bins = np.arange(-180, 185, 5)
+    lat_bins = np.arange(-90, 95, 5)
+
+    grid = gridded_mean(
+        data.lat.values, data.lon.values, data.iwp.values, (lat_bins, lon_bins)
+    )
+
+    return xr.Dataset({
+        "IWP_mean": (("lat", "lon"), grid[0]),
+        "IWP_number": (("lat", "lon"), grid[1]),
+        "lat": lat_bins[:-1],
+        "lon": lon_bins[:-1],
+    })
+
+
+def collect_spareice(version):
     spareice_files = FileSet(
        name="SPAREICE",
-       path="/work/um0878/user_data/jmrziglod/spareice/noaa18/"
+       path=f"/work/um0878/user_data/jmrziglod/spareice/{version}/noaa18/"
             "{year}/{month}/{day}/{year}{month}{day}_{hour}{minute}{second}-"
             "{end_hour}{end_minute}{end_second}.nc",
-       max_threads=15,
+       max_processes=PROCESSES,
+       placeholder={"version": version}
     )
 
     print("Collect SPARE-ICE...")
-    data = xr.concat(
-       spareice_files[START:END],
-       dim="collocation"
+    data_list = spareice_files.map(
+        get_gridded_mean, start=START, end=END, on_content=True,
+        pass_info=True,
+    )
+    data = xr.concat(data_list, dim="time")
+    #data.to_netcdf(f"data/{version}_SPARE-ICE_{START}.nc")
+    return data
+
+
+def retrieve_spareice(version):
+    collocations = Collocations(
+        path="/work/um0878/user_data/jmrziglod/collocations/MHS_AVHRR/noaa18/"
+             "{year}/{month}/{day}/{year}{month}{day}_{hour}{minute}{second}-"
+             "{end_hour}{end_minute}{end_second}.nc",
+        reference="MHS",
     )
 
-    data.to_netcdf(f"SPARE-ICE_{START}.nc")
-    return data
+    spareice = SPAREICE(
+        file=f"experiments/{version}/spareice.json",
+        verbose=2, sea_mask_file="data/land_water_mask_5min.png",
+        elevation_file="data/surface_elevation_1deg.nc",
+    )
+
+    return collocations.map(
+        get_gridded_mean, kwargs={
+            "spareice": spareice,
+        }, on_content=True, pass_info=True, start=START, end=END,
+        max_workers=PROCESSES, worker_type="process"
+    )
 
 
 def collect_cloudsat():
@@ -43,7 +101,7 @@ def collect_cloudsat():
         read_args={
             "fields": ["ice_water_path"],
         },
-        max_threads=10,
+        max_threads=15,
     )
 
     print("Collect 2C-ICE...")
@@ -52,7 +110,7 @@ def collect_cloudsat():
         dim="scnline"
     )
 
-    data.to_netcdf(f"2C-ICE_{START}.nc")
+    data.to_netcdf(f"data/2C-ICE_{START}.nc")
     return data
 
 
@@ -65,56 +123,19 @@ def plot_zonal_mean(ax, lat, iwp, label):
     ax.plot(lat_bins[:-1] + 2.5, zonal, label=label)
 
 
-#cloudsat = collect_cloudsat()
-cloudsat = xr.open_dataset(f"2C-ICE_{START}.nc")
-spareice = collect_spareice()
-#spareice = xr.open_dataset(f"SPARE-ICE_{START}.nc")
+cpr = xr.open_dataset("data/2C-ICE_gridded_2008.nc")
+cpr.load()
+cgridded = cpr["2C-ICE_mean"].values
 
-print(spareice, cloudsat)
+result_list = [r for r in retrieve_spareice(VERSION) if r is not None]
+results = xr.concat(result_list, dim="time")
+weights = results.IWP_number / results.IWP_number.sum("time")
+gridded = (weights * results.IWP_mean).sum("time")
+gridded.to_netcdf(f"data/{VERSION}_SPARE-ICE_{START}.nc")
 
-if False:
-    #fig, ax = plt.subplots(figsize=(10, 8))
-    #sdata = xr.open_dataset("spareice_2007.nc")
-    #lat_bins = np.arange(-90, 85, 5)
-    #ax.hist(sdata.lat.values, bins=lat_bins)
-    #ax.set_xlabel("latitude [$^\circ$]")
-    #ax.set_ylabel("number")
-    #ax.set_title("2007 SPARE-ICE distribution")
-    #fig.tight_layout()
-    #fig.savefig("spareice_lats_2007.png")
-    #exit()
-
-    fig, ax = plt.subplots(figsize=(10, 8))
-    cdata = xr.open_dataset("2C-ICE_2007.nc")
-    ax.hist(cdata.lat.values, bins=lat_bins)
-    ax.set_xlabel("latitude [$^\circ$]")
-    ax.set_ylabel("number")
-    ax.set_title("2007 2C-ICE distribution")
-    fig.tight_layout()
-    fig.savefig("2c-ice_lats_2007.png")
-
-
-fig, ax = plt.subplots(figsize=(10, 8))
-print("Bin SPARE-ICE...")
-plot_zonal_mean(ax, spareice.lat, spareice.iwp, "SPARE-ICE (typhon)")
-print("Bin 2C-ICE...")
-plot_zonal_mean(ax, cloudsat.lat, cloudsat.ice_water_path, "2C-ICE")
+fig, ax = plt.subplots(figsize=(15, 10))
+ax.plot(results.lat.values+2.5, cgridded.mean(axis=1), label="2C-ICE")
+ax.plot(results.lat.values+2.5, gridded.values.mean(axis=1),
+        label=f"SPARE-ICE ({VERSION})")
 ax.legend()
-ax.set_xlabel("latitude [$^\circ$]")
-ax.set_ylabel("IWP [$g/m^2$]")
-ax.set_title(f"{START} Zonal Mean Comparison")
-fig.tight_layout()
-fig.savefig(f"zonal_mean_{START}.png")
-
-# fig, ax = plt.subplots(figsize=(10, 8))
-# print("Bin SPARE-ICE...")
-# plot_zonal_mean(ax, spareice.lat, np.log10(spareice.iwp), "SPARE-ICE (typhon)")
-# print("Bin 2C-ICE...")
-# iwp = cloudsat.ice_water_path
-# plot_zonal_mean(ax, cloudsat.lat[iwp != 0], np.log10(iwp[iwp != 0]), "2C-ICE")
-# ax.legend()
-# ax.set_xlabel("latitude [$^\circ$]")
-# ax.set_ylabel("log10 IWP [$g/m^2$]")
-# ax.set_title(f"{START} Zonal Mean Comparison")
-# fig.tight_layout()
-# fig.savefig(f"zonal_mean_log10_{START}.png")
+fig.savefig(f"experiments/{VERSION}/zonal_mean_{START}.png")
